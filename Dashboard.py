@@ -1,94 +1,77 @@
 import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash import html, dcc
 import pandas as pd
-import plotly.graph_objects as go
-import os
+import plotly.graph_objs as go
+import requests
 
-# 🟢 Windows Google Drive Path (Change if needed)
-GOOGLE_DRIVE_PATH = r"G:\My Drive\Colab Notebooks\CSV_DATA"
+# Constants
+THINGSPEAK_API_KEY = "8VBQT42DSZ7SSCV3"
+CHANNEL_ID = "2867238"
 
-# Sensor Labels for Better Readability
-SENSOR_LABELS = {
-    'Soil_Temperature': "Soil Temperature (°C)",
-    'Air_Temperature': "Air Temperature (°C)",
-    'Humidity': "Humidity (%)",
-    'Light_Intensity': "Light Intensity (lux)"
+PREDICTED_CSV_URLS = {
+    "Air_Temperature": "https://drive.google.com/uc?export=download&id=1-bNzPoA-2VWE1vpka4vy4vUXxI17MqPb",
+    "Soil_Temperature": "https://drive.google.com/uc?export=download&id=1-6yBJmU4Iz2wfwg_opJdKgQVu4tLEALb",
+    "Humidity": "https://drive.google.com/uc?export=download&id=1-U0-uaAyyoRo4gVM-tzyFypL1nNtINKQ",
+    "Light_Intensity": "https://drive.google.com/uc?export=download&id=1-A3_3DvK0eVOotIlZq5jyEl-lM0AWn27",
 }
 
-# Initialize Dash App
+# Map fields from ThingSpeak to names
+FIELD_MAP = {
+    "field1": "Air Temperature (°C)",
+    "field2": "Soil Temperature (°C)",
+    "field3": "Humidity (%)",
+    "field4": "Light Intensity (lux)",
+}
+
+# Fetch ThingSpeak actual data
+def fetch_actual_data():
+    url = f"https://api.thingspeak.com/channels/{CHANNEL_ID}/feeds.json?api_key={THINGSPEAK_API_KEY}&results=100"
+    response = requests.get(url)
+    feeds = response.json()['feeds']
+    df = pd.DataFrame(feeds)
+    df['created_at'] = pd.to_datetime(df['created_at'])
+    return df
+
+# Fetch predicted data from Google Drive
+def fetch_predicted_data(url):
+    df = pd.read_csv(url)
+    df['Time'] = pd.to_datetime(df['Time'])
+    return df
+
+# Build graph for actual data
+def build_actual_graph(df, field, label):
+    return dcc.Graph(
+        figure={
+            'data': [go.Scatter(x=df['created_at'], y=df[field], mode='lines+markers', name="Actual")],
+            'layout': go.Layout(title=f"Actual - {label}", xaxis={'title': 'Time'}, yaxis={'title': label})
+        }
+    )
+
+# Build graph for predicted data
+def build_predicted_graph(df, label):
+    return dcc.Graph(
+        figure={
+            'data': [go.Scatter(x=df['Time'], y=df['Predicted Value'], mode='lines+markers', name="Predicted")],
+            'layout': go.Layout(title=f"Predicted - {label}", xaxis={'title': 'Time'}, yaxis={'title': label})
+        }
+    )
+
+# Load data
+actual_df = fetch_actual_data()
+
+# Dash App Setup
 app = dash.Dash(__name__)
+app.layout = html.Div(style={'backgroundColor': '#f0fff0', 'padding': '10px'}, children=[
+    html.H1("Greenhouse Monitoring Dashboard", style={'textAlign': 'center'}),
 
-app.layout = html.Div(style={'backgroundColor': 'green', 'color': 'Black', 'padding': '10px'}, children=[
-    html.H1("Greenhouse AI Predictions Dashboard", style={'textAlign': 'center'}),
+    # Actual Data Graphs
+    html.H2("Actual Sensor Readings", style={'textAlign': 'center'}),
+    *[build_actual_graph(actual_df, field, label) for field, label in FIELD_MAP.items()],
 
-    dcc.Dropdown(
-        id='sensor-dropdown',
-        options=[{'label': label, 'value': key} for key, label in SENSOR_LABELS.items()],
-        value='Air_Temperature',  # Default sensor selection
-        style={'width': '50%', 'margin': 'auto'}
-    ),
-
-    html.Div(id='prediction-title', style={'textAlign': 'center'}),
-
-    dcc.Graph(id='prediction-graph', style={'height': '80vh'})
+    # Predicted Data Graphs
+    html.H2("AI Predicted Sensor Values", style={'textAlign': 'center'}),
+    *[build_predicted_graph(fetch_predicted_data(url), FIELD_MAP[f'field{i+1}']) for i, (key, url) in enumerate(PREDICTED_CSV_URLS.items())]
 ])
-
-@app.callback(
-    [Output('prediction-title', 'children'),
-     Output('prediction-graph', 'figure')],
-    [Input('sensor-dropdown', 'value')]
-)
-def update_graph(selected_feature):
-    """Load actual & predicted CSV data from Google Drive and update graph."""
-
-    actual_file = os.path.join(GOOGLE_DRIVE_PATH, "Actual_Sensor_Data.csv")  # 🔹 Actual data file
-    predicted_file = os.path.join(GOOGLE_DRIVE_PATH, f"Predicted_{selected_feature}.csv")  # 🔹 AI Predictions
-
-    if os.path.exists(actual_file) and os.path.exists(predicted_file):
-        # Load actual sensor data
-        actual_df = pd.read_csv(actual_file)
-        actual_df['Time'] = pd.to_datetime(actual_df['Time'])  # Convert time to datetime
-
-        # Load AI prediction data
-        predicted_df = pd.read_csv(predicted_file)
-        predicted_df['Time'] = pd.to_datetime(predicted_df['Time'])  # Convert time to datetime
-
-        # Define sensor label
-        y_axis_label = SENSOR_LABELS[selected_feature]
-
-        # Create graph with actual and predicted values
-        fig = go.Figure()
-
-        # Plot actual sensor data
-        fig.add_trace(go.Scatter(
-            x=actual_df['Time'], y=actual_df[selected_feature],
-            mode='lines+markers', name="Actual Data", line=dict(color='blue')
-        ))
-
-        # Plot AI predicted data (future)
-        fig.add_trace(go.Scatter(
-            x=predicted_df['Time'], y=predicted_df['Predicted Value'],
-            mode='lines+markers', name="Predicted Future", line=dict(color='red', dash='dash')
-        ))
-
-        # Ensure proper Y-axis scaling
-        y_min = min(actual_df[selected_feature].min(), predicted_df["Predicted Value"].min()) * 0.9
-        y_max = max(actual_df[selected_feature].max(), predicted_df["Predicted Value"].max()) * 1.1
-
-        # Formatting
-        fig.update_layout(
-            title=f"AI Prediction for {selected_feature}",
-            xaxis_title="Time",
-            yaxis_title=y_axis_label,
-            template="plotly_dark",
-            yaxis=dict(range=[y_min, y_max])
-        )
-
-        return f"Predictions for {selected_feature}", fig
-
-    else:
-        return f"No Data Available for {selected_feature}", {}
 
 if __name__ == '__main__':
     app.run_server(debug=True, port=8050)
